@@ -10,7 +10,7 @@
 #SBATCH --mail-type=BEGIN,END
 #SBATCH --mail-user=sam.vanderpoel@stonybrook.edu
 
-python src/lang_names.py --action train_done --model_dir models_short > train_done.txt
+python src/lang_names.py --action train_done --model_dir models > train_done.txt
 python src/lang_names.py --action data_gen_done --avoid train_done.txt > train_langs.txt
 python src/gen_trials.py
 

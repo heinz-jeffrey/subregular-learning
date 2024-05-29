@@ -92,7 +92,6 @@ if __name__ == "__main__":
             "simple",
             "gru",
             "lstm",
-            "stackedrnn",
             "transformer"
         ]
         drops = ["NoDrop"]

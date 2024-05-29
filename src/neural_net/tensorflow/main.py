@@ -1,6 +1,7 @@
 import argparse
 from datetime import datetime
 import json
+import multiprocessing
 import os
 
 import tensorflow as tf
@@ -15,20 +16,16 @@ from predict_direct import predict
 from eval_direct import evaluate_predictions
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--train-data", type=str, required=True)
-    parser.add_argument("--val-data", type=str, required=True)
-    parser.add_argument("--output-dir", type=str, required=True)
-    parser.add_argument("--model-type", type=str, required=True)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--short-strings", type=bool, default=False)
-    args = parser.parse_args()
+def train_eval_model(model_spec):
+    lang, size, model_type, batch_size, short_strings = model_spec
 
-    model_path = os.path.dirname(args.output_dir)
-    lang = model_path.split("/")[-1].split("_")[3]
+    train_data = os.path.join("data_gen", size, f"{lang}_Train.txt")
+    val_data = os.path.join("data_gen", size, f"{lang}_Dev.txt")
+    model_dir = "models" if not short_strings else "models_short"
+    model_path = os.path.join(model_dir, f"Uni_{model_type}_NoDrop_{lang}_{size}")
     os.makedirs(model_path, exist_ok=True)
 
+    # set up hyperparamters
     model_types = ["simple", "gru", "lstm", "transformer"]
     hparams = {
         "dropout": [0.1, 0.1, 0.0, 0.1],
@@ -40,12 +37,10 @@ if __name__ == "__main__":
         "optimizer": ["Adam", "RMSprop", "RMSprop", "Adam"],
     }
     hparams = {
-        model_type: {hparam: hparams[hparam][idx] for hparam in hparams}
-        for idx, model_type in enumerate(model_types)
+        m_type: {hparam: hparams[hparam][idx] for hparam in hparams}
+        for idx, m_type in enumerate(model_types)
     }
 
-    model_type = args.model_type
-    batch_size = args.batch_size
     dropout = hparams[model_type]["dropout"]
     embed_dim = hparams[model_type]["embed_dim"]
     epochs = hparams[model_type]["epochs"]
@@ -67,8 +62,8 @@ if __name__ == "__main__":
     optimizer = optimizers[optimizer](learning_rate=learning_rate)
 
     vocabulary = {"pad": 0}
-    vocabulary, x_train, y_train = parse_dataset(args.train_data, vocabulary)
-    vocabulary, x_val, y_val = parse_dataset(args.val_data, vocabulary)
+    vocabulary, x_train, y_train = parse_dataset(train_data, vocabulary)
+    vocabulary, x_val, y_val = parse_dataset(val_data, vocabulary)
     vocab_file = os.path.join(model_path, "vocab.txt")
 
     max_length = 64
@@ -79,7 +74,7 @@ if __name__ == "__main__":
     y_train = tf.constant(y_train)
     y_val = tf.constant(y_val)
 
-    if args.short_strings:
+    if short_strings:
         short_string_dir = "../tmp/shortgen/OnlyShort"
         short_string_file = os.path.join(short_string_dir, f"{lang}_TrainOS.mlrt")
         vocabulary, x_short, y_short = parse_dataset(short_string_file, vocabulary)
@@ -134,7 +129,7 @@ if __name__ == "__main__":
         batch_size=batch_size,
         epochs=epochs,
         validation_data=(x_val, y_val),
-        callbacks=callbacks,
+        callbacks=[],
     )
 
     total_time = (datetime.now() - time_now).total_seconds()
@@ -151,3 +146,27 @@ if __name__ == "__main__":
     for test_type, data_file in zip(test_types, data_files):
         predict(model, model_path, data_file, f"Test{test_type}", vocabulary)
         evaluate_predictions(f"{model_path}/Test{test_type}_pred.txt")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-file", type=str, required=True)
+    model_file = parser.parse_args().model_file
+
+    batch_size = 64
+    short_strings = False
+
+    model_specs = [
+        line.split() + [batch_size, short_strings]
+        for line in open(model_file).readlines()
+    ]
+
+    time_now = datetime.now()
+
+    num_processes = multiprocessing.cpu_count() - 1
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results = pool.map(train_eval_model, model_specs)
+
+    total_time = (datetime.now() - time_now).total_seconds()
+    print(f"TOTAL TIME IN SECONDS: {total_time}\n")
+
