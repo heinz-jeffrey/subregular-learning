@@ -9,9 +9,6 @@ cols = c("alph", "tier", "class", "k", "j", "i", "network_type",
          "train_set_size", "test_type", "accuracy", "fscore", "auc", "brier")
 eval = read.csv('all_evals.csv', header=TRUE)[cols]
 
-# removing the experiments involving size 64 alph languages because data is bad
-eval <- filter(eval, alph != 64)
-
 eval$alph = as.factor(eval$alph)
 eval$tier = as.factor(eval$tier)
 eval$class = as.factor(eval$class)
@@ -20,6 +17,14 @@ eval$train_set_size = as.factor(eval$train_set_size)
 eval$test_type = as.factor(eval$test_type)
 
 cnts = read.table('counts.tsv', header=TRUE, sep='\t')
+
+# Reporting basic stats on sizes of automata representations of the languages
+summary(cnts$Size)
+summary(cnts$Monoid)
+
+print(sd(cnts$Size))
+print(sd(cnts$Monoid))
+
 data = merge(
      eval,
      cnts,
@@ -28,15 +33,19 @@ data = merge(
 )
 
 data$network_type = recode_factor(data$network_type,
-                                  simple="Simple RNN",
+                                  simple="RNN",
                                   gru="GRU",
                                   lstm="LSTM",
-                                  stackedrnn="2-layer LSTM",
                                   transformer="Transformer")
 
 
+# checking correlations among accuracy, AUC, Brier, and f-score measures
 
-# SET UP CAST MATRIX WITH LANG CLASSES AS COLUMNS
+cor(data[, c('accuracy', 'auc', 'brier', 'fscore')])
+
+
+
+#SET UP CAST MATRIX WITH LANG CLASSES AS COLUMNS
 df = aggregate(data$accuracy,
                by=list(alph=data$alph,
                        network_type=data$network_type,
@@ -57,28 +66,25 @@ data.matrix = acast(df,
                     alph + class + network_type + test_type ~ train_set_size,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL SIZES HAVE THE SAME ACCURACY.
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
-# TRAIN SET SIZES ARE DIFFERENT IN THE EXPECTED WAY.
 # ========================================================================
 
-
-# TEST TYPE DIFFICULTY IS AS FOLLOWS: SR < LR < SA < LA
-# ========================================================================
 
 
 # FRIEDMAN TEST FOR LANGUAGE CLASSES
 # ========================================================================
+data.matrix = acast(df,
+                    alph + test_type + network_type + train_set_size ~ class,
+                    value.var="x")
 friedman.test(cast.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL LG CLASSES HAVE THE SAME ACCURACY.
 
 frdAllPairsNemenyiTest(cast.matrix)
 colMeans(cast.matrix)
 
-# SANITY CHECK : SL/coSL, SP/coSP, TSL/TcoSL all-pairs p-values are close to 1.
+# SANITY CHECK : ARE SL/coSL, SP/coSP, TSL/TcoSL all-pairs p-values close to 1?
 
 
 # ========================================================================
@@ -89,22 +95,48 @@ data.matrix = acast(df,
                     alph + class + network_type + train_set_size ~ test_type,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL SIZES HAVE THE SAME ACCURACY.
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
 
+# is TEST TYPE DIFFICULTY AS FOLLOWS: SR < LR < SA < LA ?
 # ========================================================================
-# COHEN'S D FOR TEST TYPES
-# ========================================================================
-sa <- subset(eval, eval$test_type == 'SA')
-sr <- subset(eval, eval$test_type == 'SR')
-la <- subset(eval, eval$test_type == 'LA')
-lr <- subset(eval, eval$test_type == 'LR')
-cohen.d(sr$accuracy, lr$accuracy) #$estimate
-cohen.d(lr$accuracy, sa$accuracy) #$estimate
-cohen.d(sa$accuracy, la$accuracy) #$estimate
+
+networks = c('RNN', 'GRU', 'LSTM', 'Transformer')
+for (ntw in networks) {
+  print(ntw)
+  data.matrix = acast(df[df$network_type == ntw,],
+                      alph + class + network_type + train_set_size ~ test_type,
+                      value.var="x")
+  print(friedman.test(data.matrix))
+  
+  # POST HOC MULTIPLE COMPARISONS ANALYSIS
+  print(frdAllPairsNemenyiTest(data.matrix))
+  print(sort(colMeans(data.matrix)))
+  
+}
+
+
+
+
+# CREATE AGGREGATE MATRIX FOR NNs VS TEST TYPE
+trainsizes <- c('Small', 'Mid', 'Large')
+
+for (size in trainsizes) {
+
+  df.tmp = data[data$train_set_size == size,]
+  agg.tmp = aggregate(df.tmp$accuracy,
+                    by=list( network_type=df.tmp$network_type
+                           , test=df.tmp$test_type)
+                           , FUN=mean)
+  agg = acast(agg.tmp, network_type ~ test, value.var="x")
+  
+  print(size)
+  print(agg[,c(4,2,3,1)])
+
+}
+
 
 
 # ========================================================================
@@ -123,6 +155,7 @@ data$logic <-
      ifelse(data$class %in% fo, "FO",
      ifelse(data$class %in% reg, "REG", "OTHER")))))
 
+
 logic.agg = aggregate(data$accuracy,
                       by=list(alph=data$alph,
                               network_type=data$network_type,
@@ -135,33 +168,25 @@ data.matrix = acast(logic.agg,
                     value.var="x")
 
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL LOGICS ARE THE SAME
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
-colMeans(data.matrix)
+sort(colMeans(data.matrix))
+
+
 # REG IS HARDEST TO LEARN. OTHERS ARE NOT SO CLEAR.
 # ========================================================================
-
-# ========================================================================
-# COHEN'S D FOR LOGICAL LEVELS
-# ========================================================================
-cnl  <- subset(data, data$logic == "CNL")
-dpl  <- subset(data, data$logic == "DPL")
-prop <- subset(data, data$logic == "PROP")
-fo   <- subset(data, data$logic == "FO")
-reg  <- subset(data, data$logic == "REG")
-
-cohen.d(cnl$accuracy, dpl$accuracy) #$estimate
-cohen.d(cnl$accuracy, prop$accuracy)
-cohen.d(cnl$accuracy, fo$accuracy)
-cohen.d(cnl$accuracy, reg$accuracy)
-cohen.d(dpl$accuracy, prop$accuracy)
-cohen.d(dpl$accuracy, fo$accuracy)
-cohen.d(dpl$accuracy, reg$accuracy)
-cohen.d(prop$accuracy, fo$accuracy)
-cohen.d(prop$accuracy, reg$accuracy)
-cohen.d(fo$accuracy, reg$accuracy)
+for (ntw in networks) {
+    data.matrix = acast(logic.agg[logic.agg$network_type == ntw,],
+                        alph + network_type + train_set_size + test_type ~ logic,
+                        value.var="x")
+    print(ntw)
+    print(sort(colMeans(data.matrix)))
+    print(friedman.test(data.matrix))
+    # POST HOC MULTIPLE COMPARISONS ANALYSIS
+    print(frdAllPairsNemenyiTest(data.matrix))
+  }
 
 
 
@@ -191,30 +216,27 @@ data.matrix = acast(prop.agg,
                     value.var="x")
 
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p = 2.244e-08 --> NOT ALL LOGICS ARE THE SAME
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
-colMeans(data.matrix)
-# PRECEDENCE IS HARDER TO LEARN THAN SUCCESSOR
-# TSUCC & SUCC THE SAME
-# ========================================================================
-
+sort(colMeans(data.matrix))
 
 # ========================================================================
-# COHEN'S D FOR ORDERING RELATION
-# ========================================================================
-succ <- subset(data, data$prop == "SUCC")
-prec  <- subset(data, data$prop == "PREC")
-tsucc <- subset(data, data$prop == "TSUCC")
-other   <- subset(data, data$prop == "OTHER")
 
-cohen.d(succ$accuracy, prec$accuracy) #$estimate
-cohen.d(succ$accuracy, tsucc$accuracy)
-cohen.d(succ$accuracy, other$accuracy)
-cohen.d(prec$accuracy, tsucc$accuracy)
-cohen.d(prec$accuracy, other$accuracy)
-cohen.d(tsucc$accuracy, other$accuracy)
+for (ntw in networks) {
+    data.matrix = acast(logic.agg[logic.agg$network_type == ntw,],
+                        alph + network_type + train_set_size + test_type ~ prop,
+                        value.var="x")
+    print(ntw)
+    print(sort(colMeans(data.matrix)))
+    print(friedman.test(data.matrix))
+    # POST HOC MULTIPLE COMPARISONS ANALYSIS
+    print(frdAllPairsNemenyiTest(data.matrix))
+  }
+
+
+
 
 # ========================================================================
 # FRIEDMAN TEST FOR ALPHABET SIZES:
@@ -223,24 +245,25 @@ data.matrix = acast(df,
                     class + network_type + train_set_size + test_type ~ alph,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL ALPHABETS HAVE SAME ACCURACY.
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
-# DIFFICULTY NEARLY IN ASCENDING ORDER: 64 --> 16, 4
-# ========================================================================
+
+for (ntw in networks) {
+  data.matrix = acast(df[df$network_type == ntw,],
+                      class + network_type + train_set_size + test_type ~ alph,
+                      value.var="x")
+  print(ntw)
+  print(sort(colMeans(data.matrix)))
+  print(friedman.test(data.matrix))
+  # POST HOC MULTIPLE COMPARISONS ANALYSIS
+  print(frdAllPairsNemenyiTest(data.matrix))
+}
+
 
 # ========================================================================
-# COHEN'S D FOR ALPHABET SIZES
-# ========================================================================
-a64 <- subset(data, data$alph == 64)
-a16 <- subset(data, data$alph == 16)
-a04 <- subset(data, data$alph == 4)
-
-cohen.d(a64$accuracy, a16$accuracy) #$estimate
-cohen.d(a64$accuracy, a04$accuracy)
-cohen.d(a16$accuracy, a04$accuracy)
 
 
 # ========================================================================
@@ -251,30 +274,13 @@ data.matrix = acast(df,
                     alph + class + train_set_size + test_type ~ network_type,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL NNs HAVE THE SAME ACCURACY.
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
-colMeans(data.matrix)
-# SIMPLE RNNs OUTPERFORM GRUs, LSTMs, AND TRANSFORMERS
-# NO SIGNIFICANT DIFFERENCE BETWEEN SIMPLE AND 2layer LSTM
-# ========================================================================
+sort(colMeans(data.matrix))
 
 # ========================================================================
-# COHEN'S D FOR NETWORK TYPE
-# ========================================================================
-srnn  <- subset(data, data$network_type == "Simple RNN")
-lstm  <- subset(data, data$network_type == "LSTM")
-gru   <- subset(data, data$network_type == "GRU")
-lstm2 <- subset(data, data$network_type == "2-layer LSTM")
-tran  <- subset(data, data$network_type == "Transformer")
-
-cohen.d(srnn$accuracy, lstm2$accuracy) #$estimate
-cohen.d(lstm2$accuracy, lstm$accuracy)
-cohen.d(lstm$accuracy, gru$accuracy)
-cohen.d(gru$accuracy, tran$accuracy)
-
-cohen.d(srnn$accuracy, gru$accuracy)
 
 # Small Training Set
 # ==================
@@ -283,24 +289,13 @@ data.matrix = acast(df.temp,
                     alph + class + train_set_size + test_type ~ network_type,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 
-# --> NOT ALL NNs HAVE THE SAME ACCURACY ON SMALL TRAINING DATA
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
-# SIMPLE RNNS OUTPERFORM EVERYTHING
-# NO SIGNIFICANT DIFFERENCES AMONG OTHERS
-# ========================================================================
 
 # ========================================================================
-# COHEN'S D FOR NETWORK TYPE (SMALL)
-# ========================================================================
-srnn  <- subset(data, data$network_type == "Simple RNN" & data$train_set_size=="Small")
-lstm  <- subset(data, data$network_type == "LSTM" & data$train_set_size=="Small")
-
-cohen.d(srnn$accuracy, lstm$accuracy) #$estimate
-
 
 
 
@@ -310,28 +305,14 @@ data.matrix = acast(df.temp,
                     alph + class + train_set_size + test_type ~ network_type,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 
-# --> NOT ALL NNs HAVE THE SAME ACCURACY ON MID TRAINING DATA
+
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
-# SIMPLE, LSTM, 2LSTM ARE NOT SIGNIFICANTLY DIFFERENT FROM EACH OTHER
-# SIMPLE, LSTM, 2LSTM ARE SIGNIFICANTLY DIFFERENT FROM GRU, TRANSFORMER
-# ========================================================================
 
 # ========================================================================
-# COHEN'S D FOR NETWORK TYPE (MID)
-# ========================================================================
-gru  <- subset(data, data$network_type == "GRU" & data$train_set_size=="Mid")
-lstm  <- subset(data, data$network_type == "LSTM" & data$train_set_size=="Mid")
-tran  <- subset(data, data$network_type == "Transformer" & data$train_set_size=="Mid")
-lstm2  <- subset(data, data$network_type == "2-layer LSTM" & data$train_set_size=="Mid")
 
-cohen.d(gru$accuracy, lstm$accuracy) #$estimate
-cohen.d(gru$accuracy, tran$accuracy) #$estimate
-cohen.d(lstm2$accuracy, lstm$accuracy) #$estimate
-cohen.d(lstm2$accuracy, tran$accuracy) #$estimate
 
 # Large Training Set
 df.temp = df[df$train_set_size == "Large",]
@@ -339,25 +320,12 @@ data.matrix = acast(df.temp,
                     alph + class + train_set_size + test_type ~ network_type,
                     value.var="x")
 friedman.test(data.matrix)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL NNs HAVE THE SAME ACCURACY.
 
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.matrix)
 colMeans(data.matrix)
-# 2LSTM SIGNIFICANTLY DIFFERENT THAN ALL OTHERS
-# ========================================================================
 
 # ========================================================================
-# COHEN'S D FOR NETWORK TYPE (LARGE)
-# ========================================================================
-srnn  <- subset(data, data$network_type == "Simple RNN" & data$train_set_size=="Large")
-lstm  <- subset(data, data$network_type == "LSTM" & data$train_set_size=="Large")
-tran  <- subset(data, data$network_type == "Transformer" & data$train_set_size=="Large")
-lstm2  <- subset(data, data$network_type == "2-layer LSTM" & data$train_set_size=="Large")
-
-cohen.d(lstm2$accuracy, lstm$accuracy) #$estimate
-cohen.d(lstm2$accuracy, tran$accuracy) #$estimate
-cohen.d(lstm2$accuracy, srnn$accuracy) #$estimate
 
 
 
@@ -389,20 +357,18 @@ data.prop2 = acast(df.temp2,
                    value.var="x")
 
 friedman.test(data.prop1)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL k VALS HAVE SAME ACCURACY.
+
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.prop1)
 colMeans(data.prop1)
-# FOR PROP1, k=2 SIGNIFICANTLY EASIER THAN k=4,6 BUT k=4 NOT SIGNIFICANTLY
-# DIFFERENT THAN k=6
+
 
 friedman.test(data.prop2)
-# FRIEDMAN REJECTED AT p < 2.2e-16 --> NOT ALL k VALS HAVE SAME ACCURACY.
+
 # POST HOC MULTIPLE COMPARISONS ANALYSIS
 frdAllPairsNemenyiTest(data.prop2)
 colMeans(data.prop2)
-# FOR PROP2, k=2 SIGNIFICANTLY EASIER THAN k=4,6 BUT k=4 NOT SIGNIFICANTLY
-# DIFFERENT THAN k=6
+
 # ========================================================================
 
 
@@ -509,31 +475,23 @@ jpeg("acc_class_nn_large.jpeg", units="in", width=12, height=5, res=300)
 )
 dev.off()
 
-#jpeg("acc_class_dratioclass.jpeg", units="in", width=10, height=5, res=300)
-#(
-#  ggplot(data, aes(x=class, y=accuracy, fill=factor(d.ratio.class, levels=drc.order)))
-#  + geom_boxplot(outlier.shape=NA)
-#  + scale_x_discrete(limits=lang.order)
-#  + ggtitle("Accuracy by Class and D-Ratio Quartile")
-#  + theme(plot.title=element_text(hjust=0.5))
-#  + labs(x="Language Class", y="Accuracy", fill="D-Ratio Quartile")
-#)
-#dev.off()
-# ========================================================================
-
-
 
 #
 # EXTRAS
 #
 
 # CREATE AGGREGATE MATRIX FOR NNs VS LANGUAGE CLASSES
-df.tmp = data[data$train_set_size == "Large",]
-agg.tmp = aggregate(df.tmp$accuracy,
-                    by=list(network_type=df.tmp$network_type,
-                            class=df.tmp$class),
-                    FUN=mean)
-agg = acast(agg.tmp, network_type ~ class, value.var="x")
-agg
-# NOTE: TRANSFORMERS OUTPERFORM OTHER NNs ON Zp LANGS FOR LARGE TRAIN SETS
 
+trainsizes <- c('Small', 'Mid', 'Large')
+
+for (size in trainsizes) {
+
+  df.tmp = data[data$train_set_size == size,]
+  agg.tmp = aggregate(df.tmp$accuracy,
+                      by=list(network_type=df.tmp$network_type,
+                              class=df.tmp$class),
+                      FUN=mean)
+  agg = acast(agg.tmp, network_type ~ class, value.var="x")
+  print(size)
+  print(agg)
+}
